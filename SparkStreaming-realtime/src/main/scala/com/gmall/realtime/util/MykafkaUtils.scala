@@ -17,7 +17,9 @@ object MykafkaUtils {
    */
   private val consumerConfigs: mutable.Map[String, Object] = mutable.Map[String, Object](
     //kafka集群位置
-    ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG -> "hadoop102:9092,hadoop103:9092,hadoop104:9092",
+//    ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG -> "hadoop102:9092,hadoop103:9092,hadoop104:9092",
+    ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG -> Myconfig.KAFKA_BOOTSTRAP_SERVERS,
+
     // kv反序列化器
     ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG -> "org.apache.kafka.common.serialization.StringDeserializer",
     ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG -> "org.apache.kafka.common.serialization.StringDeserializer",
@@ -26,7 +28,7 @@ object MykafkaUtils {
     //offset提交
     ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG -> "true",
     // 自动提交时间间隔 默认就是5s
-    ConsumerConfig.AUTO_COMMIT_INTERVAL_MS_CONFIG -> "5000",
+//    ConsumerConfig.AUTO_COMMIT_INTERVAL_MS_CONFIG -> "5000",
     //offset重置   “latest” "earliest"
     ConsumerConfig.AUTO_OFFSET_RESET_CONFIG -> "latest"
     //...
@@ -56,19 +58,19 @@ object MykafkaUtils {
   def createProducer() = {
     val producerConfigs = new util.HashMap[String, AnyRef]()
     //kafka集群位置
-    producerConfigs.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "hadoop102:9092,hadoop103:9092,hadoop104:9092")
+    producerConfigs.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,  Myconfig.KAFKA_BOOTSTRAP_SERVERS)
     //    KV序列化器
     producerConfigs.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")
     producerConfigs.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")
     //acks
-    producerConfigs.put(ProducerConfig.ACKS_CONFIG, "all")
+    producerConfigs.put(ProducerConfig.ACKS_CONFIG, "0")
     //              默认
     // batch.size  16kb
     //linger.ms     0ms
     //retries   0
 
     //幂等性   默认false
-    producerConfigs.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true")
+//    producerConfigs.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true")
 
     val producer: KafkaProducer[String, String] = new KafkaProducer[String, String](producerConfigs)
     producer
@@ -90,7 +92,7 @@ object MykafkaUtils {
    * @param topic
    * @param msg
    */
-  def send(topic: String, key: String, msg: String,): Unit = {
+  def send(topic: String, key: String, msg: String): Unit = {
     producer.send(new ProducerRecord[String, String](topic, key, msg))
   }
 
