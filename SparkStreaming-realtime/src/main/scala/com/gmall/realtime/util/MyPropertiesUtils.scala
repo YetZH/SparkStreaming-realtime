@@ -10,7 +10,7 @@ object MyPropertiesUtils {
   }
 
   def main(args: Array[String]): Unit = {
-    println(MyPropertiesUtils.apply("kafka.bootstrap-servers"))
+    println(MyPropertiesUtils.apply("kafka.bootstrap.servers"))
   }
 
 }

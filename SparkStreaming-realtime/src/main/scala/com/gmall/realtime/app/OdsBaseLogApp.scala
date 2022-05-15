@@ -3,10 +3,12 @@ package com.gmall.realtime.app
 import com.alibaba.fastjson.serializer.SerializeConfig
 import com.alibaba.fastjson.{JSON, JSONArray, JSONObject}
 import com.gmall.realtime.bean.{PageActionLog, PageDisplayLog, PageLog, StartLog}
-import com.gmall.realtime.util.MykafkaUtils
+import com.gmall.realtime.util.{MyOffsetUtils, MykafkaUtils}
 import org.apache.kafka.clients.consumer.ConsumerRecord
+import org.apache.kafka.common.TopicPartition
 import org.apache.spark.SparkConf
 import org.apache.spark.streaming.dstream.{DStream, InputDStream}
+import org.apache.spark.streaming.kafka010.{HasOffsetRanges, OffsetRange}
 import org.apache.spark.streaming.{Seconds, StreamingContext}
 
 import scala.collection.JavaConverters._
@@ -36,13 +38,28 @@ object OdsBaseLogApp {
     //2. 从kafka中获取数据
     val topicName = "ODS_BASE_LOG" //对应生成器配置中的主题名
     val groupID = "ODS_BASE_LOG_GROUP"
+    //todo 补充  从Redis中读取offset，指定offset进行消费
+    val offsets: Map[TopicPartition, Long] = MyOffsetUtils.readOffset(topicName, groupID)
+    var kafkaDstream: InputDStream[ConsumerRecord[String, String]] = null
+    if (offsets != null && offsets.nonEmpty) {
+      kafkaDstream = MykafkaUtils.getKafkaDstream(ssc, topicName, groupID, offsets)
+    } else {
+      kafkaDstream = MykafkaUtils.getKafkaDstream(ssc, topicName, groupID)
+    }
+    //    val kafkaDstream: InputDStream[ConsumerRecord[String, String]] = MykafkaUtils.getKafkaDstream(ssc, topicName, groupID)
+    //    todo 补充： 从当前消费到的数据中提取offsets，当前操作不对流中数据做任何处理 只看一些东西
+    var offsetRanges: Array[OffsetRange] = null
+    val offsetRangesDstream: DStream[ConsumerRecord[String, String]] = kafkaDstream.transform(rdd => {
+      offsetRanges = rdd.asInstanceOf[HasOffsetRanges].offsetRanges //在哪里执行? driver端执行
+      rdd
+    })
 
-    val kafkaDstream: InputDStream[ConsumerRecord[String, String]] = MykafkaUtils.getKafkaDstream(ssc, topicName, groupID)
+
     //3. 处理数据
     //3.1 转换数据结构
 
 
-    val jsonObjDstream: DStream[JSONObject] = kafkaDstream.map {
+    val jsonObjDstream: DStream[JSONObject] = offsetRangesDstream.map {
       ConsumerRecord => {
         //获取ConsumerRecord中的value  value就是日志数据
         val log: String = ConsumerRecord.value()
@@ -103,7 +120,7 @@ object OdsBaseLogApp {
             val sourceType: String = pageObj.getString("source_type")
             //        todo    发送到页面主题当中  DWD_PAGE_LOG_TOPIC
             val pageLog = PageLog(mid, uid, ar, ch, isNew, md, os, vc, ba, pageId, lastPageId,
-              pageItem, pageItemType, duringTime, sourceType,  ts)
+              pageItem, pageItemType, duringTime, sourceType, ts)
 
             MykafkaUtils.send(DWD_PAGE_LOG_TOPIC, JSON.toJSONString(pageLog, new SerializeConfig(true)))
 
@@ -137,9 +154,9 @@ object OdsBaseLogApp {
                 val actionItemType: String = actionObj.getString("item_type")
                 val actionTs: Long = actionObj.getLong("ts")
 
-                val pageActionLog: PageActionLog =      PageActionLog(mid, uid, ar, ch, isNew, md, os, vc,
-                  ba,pageId, lastPageId, pageItem, pageItemType,
-                  duringTime,sourceType, actionId, actionItem, actionItemType, actionTs, ts)
+                val pageActionLog: PageActionLog = PageActionLog(mid, uid, ar, ch, isNew, md, os, vc,
+                  ba, pageId, lastPageId, pageItem, pageItemType,
+                  duringTime, sourceType, actionId, actionItem, actionItemType, actionTs, ts)
                 //                写出到 DWD_PAGE_ACTION_TOPIC
                 MykafkaUtils.send(DWD_PAGE_ACTION_TOPIC, JSON.toJSONString(pageActionLog, new SerializeConfig(true)))
               }
@@ -161,8 +178,14 @@ object OdsBaseLogApp {
             MykafkaUtils.send(DWD_START_LOG_TOPIC, JSON.toJSONString(startLog, new SerializeConfig(true)))
           }
         }
-      })
-    })
+        // foreach 里面 提交offset？  是在executor端执行 每条数据执行一次 太慢 不行
+      }
+      )
+      // todo foreachRDD 里面提交offset？  Driver端执行， 一个batch（批次）执行一次
+      MyOffsetUtils.saveOffset(topicName,groupID,offsetRanges)
+    }
+    )
+    //foreachRDD 外面提交offset？ 是才Driver端 但是呢每次启动程序就执行一次
     ssc.start()
     ssc.awaitTermination()
   }

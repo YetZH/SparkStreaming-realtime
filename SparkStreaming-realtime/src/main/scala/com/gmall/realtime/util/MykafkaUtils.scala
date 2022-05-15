@@ -2,6 +2,7 @@ package com.gmall.realtime.util
 
 import org.apache.kafka.clients.consumer.{ConsumerConfig, ConsumerRecord}
 import org.apache.kafka.clients.producer.{KafkaProducer, ProducerConfig, ProducerRecord}
+import org.apache.kafka.common.TopicPartition
 import org.apache.spark.streaming.StreamingContext
 import org.apache.spark.streaming.dstream.InputDStream
 import org.apache.spark.streaming.kafka010.{ConsumerStrategies, KafkaUtils, LocationStrategies}
@@ -18,7 +19,7 @@ object MykafkaUtils {
   private val consumerConfigs: mutable.Map[String, Object] = mutable.Map[String, Object](
     //kafka集群位置
 //    ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG -> "hadoop102:9092,hadoop103:9092,hadoop104:9092",
-    ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG -> Myconfig.KAFKA_BOOTSTRAP_SERVERS,
+    ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG -> MyPropertiesUtils.apply(Myconfig.KAFKA_BOOTSTRAP_SERVERS),
 
     // kv反序列化器
     ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG -> "org.apache.kafka.common.serialization.StringDeserializer",
@@ -48,6 +49,22 @@ object MykafkaUtils {
   }
 
   /**
+   *   基于SparkStreaming消费 使用指定Offset，获取到KafkaDstream
+   *  @return
+   */
+  def getKafkaDstream(ssc: StreamingContext, topic: String, groupid: String,offsets:Map[TopicPartition, Long] )
+  = {
+    consumerConfigs.put(ConsumerConfig.GROUP_ID_CONFIG, groupid)
+
+    val kafkaDStream: InputDStream[ConsumerRecord[String, String]] = KafkaUtils.createDirectStream(ssc,
+      LocationStrategies.PreferConsistent,
+      ConsumerStrategies.Subscribe[String, String](Array(topic), consumerConfigs,offsets)
+    )
+    kafkaDStream
+  }
+
+
+  /**
    * 生产者对象
    */
   val producer: KafkaProducer[String, String] = createProducer()
@@ -58,19 +75,19 @@ object MykafkaUtils {
   def createProducer() = {
     val producerConfigs = new util.HashMap[String, AnyRef]()
     //kafka集群位置
-    producerConfigs.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,  Myconfig.KAFKA_BOOTSTRAP_SERVERS)
+    producerConfigs.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,  MyPropertiesUtils(Myconfig.KAFKA_BOOTSTRAP_SERVERS))
     //    KV序列化器
     producerConfigs.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")
     producerConfigs.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")
     //acks
-    producerConfigs.put(ProducerConfig.ACKS_CONFIG, "0")
+//    producerConfigs.put(ProducerConfig.ACKS_CONFIG, "0")
     //              默认
     // batch.size  16kb
     //linger.ms     0ms
     //retries   0
 
     //幂等性   默认false
-//    producerConfigs.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true")
+    producerConfigs.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true")
 
     val producer: KafkaProducer[String, String] = new KafkaProducer[String, String](producerConfigs)
     producer
