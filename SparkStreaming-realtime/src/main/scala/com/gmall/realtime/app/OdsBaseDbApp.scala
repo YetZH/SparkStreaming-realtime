@@ -56,15 +56,15 @@ val jsonObjDstream: DStream[JSONObject] = offsetRangesDstream.map(consumerRecord
   val jSONObject: JSONObject = JSON.parseObject(value)
   jSONObject
 })
-//    jsonObjDstream.print(100)
+    jsonObjDstream.print(100)
     //    5.2 分流
-    jsonObjDstream.foreachRDD(rdd=>{
-      rdd.foreachPartition(jsonObjIter=>{
-        for (jsonObj <- jsonObjIter) {
-          
-        }
-      })
-    })
+//    jsonObjDstream.foreachRDD(rdd=>{
+//      rdd.foreachPartition(jsonObjIter=>{
+//        for (jsonObj <- jsonObjIter) {
+//
+//        }
+//      })
+//    })
 
     ssc.start()
     ssc.awaitTermination()
