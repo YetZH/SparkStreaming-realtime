@@ -86,103 +86,114 @@ object OdsBaseLogApp {
     //  页面访问日志：拆分成页面访问，曝光，事件 分别发送到对应的topic
     //  启动日志: 直接发送到对应topic
     jsonObjDstream.foreachRDD(rdd => {
-      rdd.foreach(jsonObj => {
-        //分流操作
-        //分流错误数据
-        val errObbj: JSONObject = jsonObj.getJSONObject("err")
-        if (errObbj != null) {
-          //将错误数据发送到 DWD_ERROD_LOG_TOPIC
-          MykafkaUtils.send(DWD_ERROR_LOG_TOPIC, jsonObj.toJSONString)
-        } else {
-          //页面日志
-          val commonObj: JSONObject = jsonObj.getJSONObject("common")
 
-          val ar: String = commonObj.getString("ar") //地区
-          val uid: String = commonObj.getString("uid")
-          val os: String = commonObj.getString("os")
-          val ch: String = commonObj.getString("ch")
-          val isNew: String = commonObj.getString("is_new")
-          val md: String = commonObj.getString("md")
-          val mid: String = commonObj.getString("mid")
-          val vc: String = commonObj.getString("vc")
-          val ba: String = commonObj.getString("ba") //品牌
-          //提取时间戳
-          val ts: Long = jsonObj.getLong("ts")
-          //页面日志
-          val pageObj: JSONObject = jsonObj.getJSONObject("page")
-          if (pageObj != null) {
-            //            如果不为空 就提取page字段
-            val pageId: String = pageObj.getString("page_id")
-            val pageItem: String = pageObj.getString("item")
-            val pageItemType: String = pageObj.getString("item_type")
-            val duringTime: Long = pageObj.getLong("during_time")
-            val lastPageId: String = pageObj.getString("last_page_id")
-            val sourceType: String = pageObj.getString("source_type")
-            //        todo    发送到页面主题当中  DWD_PAGE_LOG_TOPIC
-            val pageLog = PageLog(mid, uid, ar, ch, isNew, md, os, vc, ba, pageId, lastPageId,
-              pageItem, pageItemType, duringTime, sourceType, ts)
+      rdd.foreachPartition(
+        jsonObjIter => {
+          //     todo       foreachpretition  里面Executor端执行， 每批次每分区执行一次
+          for (jsonObj <- jsonObjIter) {
+            //分流操作
+            //分流错误数据
 
-            MykafkaUtils.send(DWD_PAGE_LOG_TOPIC, JSON.toJSONString(pageLog, new SerializeConfig(true)))
+            val errObbj: JSONObject = jsonObj.getJSONObject("err")
+            if (errObbj != null) {
+              //将错误数据发送到 DWD_ERROD_LOG_TOPIC
+              MykafkaUtils.send(DWD_ERROR_LOG_TOPIC, jsonObj.toJSONString)
+            } else {
+              //页面日志
+              val commonObj: JSONObject = jsonObj.getJSONObject("common")
 
-            //            提取曝光数据
-            val displaysJsonArr: JSONArray = jsonObj.getJSONArray("displays")
+              val ar: String = commonObj.getString("ar") //地区
+              val uid: String = commonObj.getString("uid")
+              val os: String = commonObj.getString("os")
+              val ch: String = commonObj.getString("ch")
+              val isNew: String = commonObj.getString("is_new")
+              val md: String = commonObj.getString("md")
+              val mid: String = commonObj.getString("mid")
+              val vc: String = commonObj.getString("vc")
+              val ba: String = commonObj.getString("ba") //品牌
+              //提取时间戳
+              val ts: Long = jsonObj.getLong("ts")
+              //页面日志
+              val pageObj: JSONObject = jsonObj.getJSONObject("page")
+              if (pageObj != null) {
+                //            如果不为空 就提取page字段
+                val pageId: String = pageObj.getString("page_id")
+                val pageItem: String = pageObj.getString("item")
+                val pageItemType: String = pageObj.getString("item_type")
+                val duringTime: Long = pageObj.getLong("during_time")
+                val lastPageId: String = pageObj.getString("last_page_id")
+                val sourceType: String = pageObj.getString("source_type")
+                //        todo    发送到页面主题当中  DWD_PAGE_LOG_TOPIC
+                val pageLog = PageLog(mid, uid, ar, ch, isNew, md, os, vc, ba, pageId, lastPageId,
+                  pageItem, pageItemType, duringTime, sourceType, ts)
 
-            if (displaysJsonArr != null && displaysJsonArr.size() > 0) {
-              for (i <- 0 until (displaysJsonArr.size())) {
-                //循环拿到每个曝光数据
-                val displayObj: JSONObject = displaysJsonArr.getJSONObject(i)
-                val displayType: String = displayObj.getString("display_type")
-                val displayItem: String = displayObj.getString("item")
-                val displayItemType: String = displayObj.getString("item_type")
-                val posId: String = displayObj.getString("pos_id")
-                val order: String = displayObj.getString("order")
-                //                  封装成 bean对象
-                val pageDisplayLog: PageDisplayLog = PageDisplayLog(mid, uid, ar, ch,
-                  isNew, md, os, vc, ba, pageId, lastPageId, pageItem, pageItemType,
-                  duringTime, sourceType, displayType, displayItem, displayItemType, order, posId, ts)
-                //                  写到 DWD_PAGE_DISPLAY_TOPIC
-                MykafkaUtils.send(DWD_PAGE_DISPLAY_TOPIC, JSON.toJSONString(pageDisplayLog, new SerializeConfig(true)))
+                MykafkaUtils.send(DWD_PAGE_LOG_TOPIC, JSON.toJSONString(pageLog, new SerializeConfig(true)))
+
+                //            提取曝光数据
+                val displaysJsonArr: JSONArray = jsonObj.getJSONArray("displays")
+
+                if (displaysJsonArr != null && displaysJsonArr.size() > 0) {
+                  for (i <- 0 until (displaysJsonArr.size())) {
+                    //循环拿到每个曝光数据
+                    val displayObj: JSONObject = displaysJsonArr.getJSONObject(i)
+                    val displayType: String = displayObj.getString("display_type")
+                    val displayItem: String = displayObj.getString("item")
+                    val displayItemType: String = displayObj.getString("item_type")
+                    val posId: String = displayObj.getString("pos_id")
+                    val order: String = displayObj.getString("order")
+                    //                  封装成 bean对象
+                    val pageDisplayLog: PageDisplayLog = PageDisplayLog(mid, uid, ar, ch,
+                      isNew, md, os, vc, ba, pageId, lastPageId, pageItem, pageItemType,
+                      duringTime, sourceType, displayType, displayItem, displayItemType, order, posId, ts)
+                    //                  写到 DWD_PAGE_DISPLAY_TOPIC
+                    MykafkaUtils.send(DWD_PAGE_DISPLAY_TOPIC, JSON.toJSONString(pageDisplayLog, new SerializeConfig(true)))
+                  }
+                }
+                //            提取动作日志
+                val actionArray: JSONArray = jsonObj.getJSONArray("actions")
+                if (actionArray != null && actionArray.size() > 0) {
+                  for (i <- 0 until actionArray.size()) {
+                    val actionObj = actionArray.getJSONObject(i)
+                    val actionItem: String = actionObj.getString("item")
+                    val actionId: String = actionObj.getString("action_id")
+                    val actionItemType: String = actionObj.getString("item_type")
+                    val actionTs: Long = actionObj.getLong("ts")
+
+                    val pageActionLog: PageActionLog = PageActionLog(mid, uid, ar, ch, isNew, md, os, vc,
+                      ba, pageId, lastPageId, pageItem, pageItemType,
+                      duringTime, sourceType, actionId, actionItem, actionItemType, actionTs, ts)
+                    //                写出到 DWD_PAGE_ACTION_TOPIC
+                    MykafkaUtils.send(DWD_PAGE_ACTION_TOPIC, JSON.toJSONString(pageActionLog, new SerializeConfig(true)))
+                  }
+                }
+              }
+              val startObj: JSONObject = jsonObj.getJSONObject("start")
+              if (startObj != null) {
+                val entry: String = startObj.getString("entry")
+                val openAndSkipMs: Long = startObj.getLong("open_ad_skip_ms")
+                val openAndMs: Long = startObj.getLong("open_ad_ms")
+                val loadingTime: Long = startObj.getLong("loading_time")
+                val openAndId: String = startObj.getString("open_ad_id")
+
+                //            封装bean
+                val startLog: StartLog = StartLog(mid, uid, ar, ch, isNew, md, os, vc, ba, entry, openAndId, loadingTime,
+                  openAndMs, openAndSkipMs, ts)
+
+                //            写出到 DWD_START_LOG_TOPIC
+                MykafkaUtils.send(DWD_START_LOG_TOPIC, JSON.toJSONString(startLog, new SerializeConfig(true)))
               }
             }
-            //            提取动作日志
-            val actionArray: JSONArray = jsonObj.getJSONArray("actions")
-            if (actionArray != null && actionArray.size() > 0) {
-              for (i <- 0 until actionArray.size()) {
-                val actionObj = actionArray.getJSONObject(i)
-                val actionItem: String = actionObj.getString("item")
-                val actionId: String = actionObj.getString("action_id")
-                val actionItemType: String = actionObj.getString("item_type")
-                val actionTs: Long = actionObj.getLong("ts")
-
-                val pageActionLog: PageActionLog = PageActionLog(mid, uid, ar, ch, isNew, md, os, vc,
-                  ba, pageId, lastPageId, pageItem, pageItemType,
-                  duringTime, sourceType, actionId, actionItem, actionItemType, actionTs, ts)
-                //                写出到 DWD_PAGE_ACTION_TOPIC
-                MykafkaUtils.send(DWD_PAGE_ACTION_TOPIC, JSON.toJSONString(pageActionLog, new SerializeConfig(true)))
-              }
-            }
+            // foreach 里面 提交offset？  是在executor端执行 每条数据执行一次 太慢 不行
           }
-          val startObj: JSONObject = jsonObj.getJSONObject("start")
-          if (startObj != null) {
-            val entry: String = startObj.getString("entry")
-            val openAndSkipMs: Long = startObj.getLong("open_ad_skip_ms")
-            val openAndMs: Long = startObj.getLong("open_ad_ms")
-            val loadingTime: Long = startObj.getLong("loading_time")
-            val openAndId: String = startObj.getString("open_ad_id")
 
-            //            封装bean
-            val startLog: StartLog = StartLog(mid, uid, ar, ch, isNew, md, os, vc, ba, entry, openAndId, loadingTime,
-              openAndMs, openAndSkipMs, ts)
 
-            //            写出到 DWD_START_LOG_TOPIC
-            MykafkaUtils.send(DWD_START_LOG_TOPIC, JSON.toJSONString(startLog, new SerializeConfig(true)))
-          }
+          //          刷写kafka
+          MykafkaUtils.flush()
         }
-        // foreach 里面 提交offset？  是在executor端执行 每条数据执行一次 太慢 不行
-      }
       )
-      // todo foreachRDD 里面提交offset？  Driver端执行， 一个batch（批次）执行一次
-      MyOffsetUtils.saveOffset(topicName,groupID,offsetRanges)
+
+      // todo foreachRDD 里面提交offset  Driver端执行， 一个batch（批次）执行一次
+      MyOffsetUtils.saveOffset(topicName, groupID, offsetRanges)
     }
     )
     //foreachRDD 外面提交offset？ 是才Driver端 但是呢每次启动程序就执行一次

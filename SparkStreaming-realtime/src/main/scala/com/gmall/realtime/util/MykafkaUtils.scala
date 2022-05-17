@@ -119,4 +119,11 @@ object MykafkaUtils {
   def close: Unit = {
     if (producer != null) producer.close()
   }
+
+  /**
+   * 刷写生产者缓冲区
+   */
+  def flush(): Unit ={
+    producer.flush()
+  }
 }
