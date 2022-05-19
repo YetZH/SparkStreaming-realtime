@@ -1,0 +1,143 @@
+package com.gmall.realtime.app
+
+import com.alibaba.fastjson.{JSON, JSONObject}
+import com.gmall.realtime.bean.{DauInfo, PageLog}
+import com.gmall.realtime.util.{MyBeanUtils, MyOffsetUtils, MyRedisUtils, MykafkaUtils}
+import org.apache.kafka.clients.consumer.ConsumerRecord
+import org.apache.kafka.common.TopicPartition
+import org.apache.spark.SparkConf
+import org.apache.spark.streaming.dstream.{DStream, InputDStream}
+import org.apache.spark.streaming.kafka010.{HasOffsetRanges, OffsetRange}
+import org.apache.spark.streaming.{Seconds, StreamingContext}
+import redis.clients.jedis.Jedis
+
+import java.text.SimpleDateFormat
+import java.time.{LocalDate, Period}
+import java.util.Date
+import scala.collection.mutable.ListBuffer
+
+
+/** 日活宽表
+ *
+ * 1. 准备实时环境
+ * 2. 从Redis中读取偏移量
+ * 3. 从kafka中消费数据
+ * 4. 提取偏移量结束点
+ * 5. 处理数据
+ * 5.1 转移数据结构
+ * 5.2 去重
+ * 5.3 维度关联
+ * 6. 写入ES
+ * 7. 提交offets
+ *
+ */
+//todo  求日活
+object DwdDauApp {
+  def main(args: Array[String]): Unit = {
+
+    //    1. 准备实时环境
+    val conf: SparkConf = new SparkConf().setMaster("local[4]").setAppName("DwdDayApp")
+    val ssc = new StreamingContext(conf, Seconds(2))
+    //    从redis中读取偏移量
+    val topicName = "DWD_PAGE_LOG_TOPIC"
+    val groupId = "DWD_DAU_GROUP"
+    val offsets: Map[TopicPartition, Long] = MyOffsetUtils.readOffset(topicName, groupId)
+    //    3. 从kafka中消费数据
+    var kafkaDstream: InputDStream[ConsumerRecord[String, String]] = null
+    if (offsets != null && offsets.nonEmpty) {
+      kafkaDstream = MykafkaUtils.getKafkaDstream(ssc, topicName, groupId, offsets)
+    } else {
+      kafkaDstream = MykafkaUtils.getKafkaDstream(ssc, topicName, groupId)
+    }
+    //    4. 提取偏移量结束点
+    var offsetRanges: Array[OffsetRange] = null
+    val OffsetRangesDstream: DStream[ConsumerRecord[String, String]] = kafkaDstream.transform(rdd => {
+      offsetRanges = rdd.asInstanceOf[HasOffsetRanges].offsetRanges
+      rdd
+    })
+    //    5. 处理数据
+    //     5.1 转换数据结构
+    val PageLogDstream: DStream[PageLog] = OffsetRangesDstream.map(
+      ConsumerRecord => {
+        val value: String = ConsumerRecord.value()
+        val pageLog: PageLog = JSON.parseObject(value, classOf[PageLog])
+        pageLog
+      }
+    )
+    //    自我审查
+    //    将页面访问数据中 上页id （last_page_id） 不为空的过滤掉
+    val filterPageLogDstream: DStream[PageLog] = PageLogDstream.filter(pageloge => {
+      pageloge.last_page_id == null
+    })
+    //    第三方审查： 通过redis将当日活跃的mid维护起来，自我审查后过滤出来的每条数据都要到redis中进行比对去重
+    //        redis 如何维护日活状态?
+    //    类型：  list/set
+    //    key:   DAY:DATE
+    //    value:    mid的集合
+    //    写入VPI:  Lpush/rpush       sadd
+    //    写出API:          smembers/sismember
+    //    过期：  24h
+    //todo 用filter 每条数据执行一次 太频繁
+
+    //    filterPageLogDstream.filter
+    val redisFilterDstream: DStream[PageLog] = filterPageLogDstream.mapPartitions(IterPageLog => {
+      val pageloges: ListBuffer[PageLog] = ListBuffer[PageLog]()
+      val Dateformat = new SimpleDateFormat("yyyy-MM-dd")
+      val jedis = MyRedisUtils.getJedisFromPool() // 一个批次开启一次
+      for (pagelog <- IterPageLog) {
+        val mid: String = pagelog.mid
+        val date = new Date(pagelog.ts)
+        val dateStr: String = Dateformat.format(date)
+        val redisKey = s"DAY:$dateStr"
+
+        if (!jedis.sismember(redisKey, mid)) {
+          jedis.sadd(redisKey, mid)
+          pageloges.append(pagelog);
+        }
+      }
+      jedis.close()
+      pageloges.iterator
+    })
+    //    5.3 维度关联
+    redisFilterDstream.mapPartitions(
+      pageLogIter => {
+        val jedis: Jedis = MyRedisUtils.getJedisFromPool()
+        for (pageLog <- pageLogIter) {
+          val dauInfo = new DauInfo()
+          //      笨办法： 一个一个挨个提取 然后赋值
+          //          todo 好办法 使用java反射  写个工具类
+          MyBeanUtils.copyProperties(pageLog, dauInfo)
+
+          //          2.补充维度
+          //           2.1用户维度
+          val uid: String = pageLog.user_id
+          val redisUidKey = s"DIM:USER_INFO:$uid"
+          val userInfo: String = jedis.get(redisUidKey)
+          val userInfoObj: JSONObject = JSON.parseObject(userInfo)
+
+          //          提取性别
+          val gender: String = userInfoObj.getString("gender")
+          //          兴趣生日
+          val birthday: String = userInfoObj.getString("brithday")
+          //          换算年龄
+          val birdate: LocalDate = LocalDate.parse(birthday)
+          val nowDate: LocalDate = LocalDate.now()
+          val age: Int = Period.between(birdate, nowDate).getYears
+          //          补充到对象中
+          dauInfo.user_gender = gender
+          dauInfo.user_age = age.toString
+          //          2.2地区信息维度
+
+
+          //          2.3 日期字段处理
+        }
+        jedis.close()
+        null
+      }
+    )
+
+
+    ssc.start()
+    ssc.awaitTermination();
+  }
+}
