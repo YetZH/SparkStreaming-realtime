@@ -99,8 +99,10 @@ object DwdDauApp {
       pageloges.iterator
     })
     //    5.3 维度关联
-    redisFilterDstream.mapPartitions(
+    val DauInfoDstream: DStream[DauInfo] = redisFilterDstream.mapPartitions(
       pageLogIter => {
+        val DauInfoes: ListBuffer[DauInfo] = ListBuffer[DauInfo]()
+        val dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
         val jedis: Jedis = MyRedisUtils.getJedisFromPool()
         for (pageLog <- pageLogIter) {
           val dauInfo = new DauInfo()
@@ -118,7 +120,7 @@ object DwdDauApp {
           //          提取性别
           val gender: String = userInfoObj.getString("gender")
           //          兴趣生日
-          val birthday: String = userInfoObj.getString("brithday")
+          val birthday: String = userInfoObj.getString("birthday")
           //          换算年龄
           val birdate: LocalDate = LocalDate.parse(birthday)
           val nowDate: LocalDate = LocalDate.now()
@@ -127,15 +129,33 @@ object DwdDauApp {
           dauInfo.user_gender = gender
           dauInfo.user_age = age.toString
           //          2.2地区信息维度
-
-
+          val provinceID: String = dauInfo.province_id
+          val redisProvinceKey = s"DIM:BASE_PROVINCE:$provinceID"
+          val provinceJson: String = jedis.get(redisProvinceKey)
+          val provinceJsonObj: JSONObject = JSON.parseObject(provinceJson)
+          val provinceName: String = provinceJsonObj.getString("name")
+          val provinceIsoCode: String = provinceJsonObj.getString("iso_code")
+          val province3166: String = provinceJsonObj.getString(("iso_3166_2"))
+          val provinceAreaCode: String = provinceJsonObj.getString("area_code")
+          dauInfo.province_name = provinceName
+          dauInfo.province_iso_code = provinceIsoCode
+          dauInfo.province_3166_2 = province3166
+          dauInfo.province_area_code = provinceAreaCode
           //          2.3 日期字段处理
+          val date = new Date(pageLog.ts)
+          val dtHr: String = dateFormat.format(date)
+          val dtHrArr: Array[String] = dtHr.split(" ")
+          dauInfo.dt = dtHrArr(0)
+          dauInfo.hr = dtHrArr(1).split(":")(0)
+          DauInfoes.append(dauInfo)
         }
         jedis.close()
-        null
+        DauInfoes.iterator
       }
     )
-
+//  todo
+    //   写入到OLAP当中  上面数据已经处理好了 下面就是分析步骤
+    DauInfoDstream.print(100)
 
     ssc.start()
     ssc.awaitTermination();
