@@ -1,7 +1,8 @@
 package com.gmall.realtime.app
 
+import com.alibaba.fastjson.serializer.SerializeConfig
 import com.alibaba.fastjson.{JSON, JSONObject}
-import com.gmall.realtime.bean.{OrderDetail, OrderInfo}
+import com.gmall.realtime.bean.{OrderDetail, OrderInfo, OrderWide}
 import com.gmall.realtime.util.{MyOffsetUtils, MyRedisUtils, MykafkaUtils}
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
@@ -12,6 +13,7 @@ import org.apache.spark.streaming.{Seconds, StreamingContext}
 import redis.clients.jedis.Jedis
 
 import java.time.{LocalDate, Period}
+import java.util
 import scala.collection.mutable.ListBuffer
 
 /**
@@ -91,9 +93,9 @@ object DwdOrderApp {
     //    orderDetailDstream.print(100)
     //   todo 5.2 维度关联 只做Order_info
     val OrderInfoDimDstream: DStream[OrderInfo] = orderInfoDstream.mapPartitions(OrderInfoIter => {
-//      也可以直接将OrderInfoIter 转到list
-//      val orderInfoes: List[OrderInfo] = OrderInfoIter.toList
-            val orderInfoes: ListBuffer[OrderInfo] = ListBuffer[OrderInfo]()
+      //      也可以直接将OrderInfoIter 转到list
+      //      val orderInfoes: List[OrderInfo] = OrderInfoIter.toList
+      val orderInfoes: ListBuffer[OrderInfo] = ListBuffer[OrderInfo]()
       val jedis: Jedis = MyRedisUtils.getJedisFromPool()
 
       for (orderInfo <- OrderInfoIter) {
@@ -140,26 +142,100 @@ object DwdOrderApp {
         orderInfo.create_date = create_date
         orderInfo.create_hour = hour
 
-                orderInfoes.append(orderInfo)
+        orderInfoes.append(orderInfo)
       }
       jedis.close()
       orderInfoes.iterator
     })
 
-//5.3 双流join
-//    内连接 join
-//   数据库层面： order info 中的数据 和order_detail表中的数据一定能关联成功
-val orderInfoKVDstream: DStream[(Long, OrderInfo)] = OrderInfoDimDstream.map(orderInfo => (orderInfo.id, orderInfo))
+    //5.3 双流join
+    //    内连接 join
+    //   数据库层面： order info 中的数据 和order_detail表中的数据一定能关联成功
+    val orderInfoKVDstream: DStream[(Long, OrderInfo)] = OrderInfoDimDstream.map(orderInfo => (orderInfo.id, orderInfo))
 
     val orderDetailKVDstream: DStream[(Long, OrderDetail)] = orderDetailDstream.map(orderDetail => (orderDetail.order_id, orderDetail))
-//       这样不行 可能数据join不上
-//    val joinResult: DStream[(Long, (OrderInfo, OrderDetail))] = orderInfoKVDstream.join(orderDetailKVDstream)
+    //       这样不行 可能数据join不上
+    //    val joinResult: DStream[(Long, (OrderInfo, OrderDetail))] = orderInfoKVDstream.join(orderDetailKVDstream)
 
-//    解决
-//    首先使用FullOuterJoin,保证join成功或者没有成功都出现到结果中
-val orderJoinDstream: DStream[(Long, (Option[OrderInfo], Option[OrderDetail]))] =
-      orderInfoKVDstream.fullOuterJoin(orderDetailKVDstream)
+    //    解决
+    //    首先使用FullOuterJoin,保证join成功或者没有成功都出现到结果中
+    val orderJoinDstream: DStream[(Long, (Option[OrderInfo], Option[OrderDetail]))] =
+    orderInfoKVDstream.fullOuterJoin(orderDetailKVDstream)
 
+    val orderWideDstream: DStream[OrderWide] = orderJoinDstream.mapPartitions(
+      orderJonIter => {
+        val orderWides: ListBuffer[OrderWide] = ListBuffer[OrderWide]()
+        val jedis: Jedis = MyRedisUtils.getJedisFromPool()
+        for ((key, (orderInfoOp, orderDetailOp)) <- orderJonIter) {
+          //          todo  关联后 一共三种情况
+          //   orderInfoOp  有  orderDetailOp有
+          if (orderInfoOp.isDefined) {
+            //todo  也可以用orderInfoOp != None 不能!=null 因为这是Option对象里面只有Some和None* {
+            //        取出OrderInfo
+            val orderInfo: OrderInfo = orderInfoOp.get
+            if (orderDetailOp.isDefined) {
+              //              取出 OrderDetail
+              val OrderDetail: OrderDetail = orderDetailOp.get
+              //              组装
+              orderWides.append(new OrderWide(orderInfo, OrderDetail))
+            }
+            //   orderInfoOp  有  orderDetailOp没有
+
+            //OrderInfo读orderDetail的缓存
+            val redisOrderDetailKey: String = s"ORDERJOIN:ORDER_Detail:${orderInfo.id}"
+            val orderDetails: util.Set[String] = jedis.smembers(redisOrderDetailKey)
+            if (orderDetails != null && orderDetails.size() > 0) {
+              import scala.collection.JavaConverters._
+              for (orderDetailJson <- orderDetails.asScala) {
+                val OrderDetail: OrderDetail = JSON.parseObject(orderDetailJson, classOf[OrderDetail])
+                orderWides.append(new OrderWide(orderInfo, OrderDetail))
+              }
+            }
+
+            //   todo OrderInfo写缓存  不管有没有 都要写
+
+            //              类型： String
+            //              Key:    ORDERJOIN:ORDER_INFO:$ID
+            //              value:  json
+            //              写入API：set
+            //              读取API：get
+            //              是否过期： 24h??  我感觉几十S就行了
+            val redisOrderInfoKey: String = s"ORDERJOIN:ORDER_INFO:${orderInfo.id}"
+            //            jedis.set(redisOrderInfoKey,JSON.toJSONString(orderInfoOp.get,new SerializeConfig(true)))
+            //            jedis.expire(redisOrderInfoKey,24*3600)
+            jedis.setex(redisOrderInfoKey, 24 * 3600, JSON.toJSONString(orderInfoOp.get, new SerializeConfig(true)))
+
+          } else {
+            //   orderInfoOp  没有  orderDetailOp有
+            val OrderDetail: OrderDetail = orderDetailOp.get
+            //      先读缓存
+            val redisOrderInfoKey: String = s"ORDERJOIN:ORDER_INFO:${OrderDetail.order_id}"
+            val OrderInfoJson: String = jedis.get(redisOrderInfoKey)
+            if (OrderInfoJson != null && OrderInfoJson.nonEmpty) {
+              val orderInfo: OrderInfo = JSON.parseObject(OrderInfoJson, classOf[OrderInfo])
+              val OrderDetail: OrderDetail = orderDetailOp.get
+              //              加入到结果集中
+              orderWides.append(new OrderWide(orderInfo, OrderDetail))
+            } else {
+              //            没读到就写orderDetail缓存
+              //  写缓存
+              //            类型：  set
+              //            key：   ORDERJOIN:ORDER_Detail:$OrderID
+              //            value：  json,json ....
+              //            写入API： sadd
+              //            读取api：smembers
+              //            是否过期： 24h
+              val redisOrderDetailKey: String = s"ORDERJOIN:ORDER_Detail:${OrderDetail.order_id}"
+              jedis.sadd(redisOrderDetailKey, JSON.toJSONString(OrderDetail, new SerializeConfig(true)))
+              jedis.expire(redisOrderDetailKey, 3600 * 24)
+            }
+          }
+        }
+        jedis.close()
+        orderWides.iterator
+      }
+    )
+    orderWideDstream.print(10000)
     ssc.start()
     ssc.awaitTermination()
 

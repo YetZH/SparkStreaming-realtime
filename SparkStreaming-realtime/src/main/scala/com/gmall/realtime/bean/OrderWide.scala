@@ -12,6 +12,7 @@ case class OrderWide(
                       var split_total_amount: Double = 0D,
                       var split_activity_amount: Double = 0D,
                       var split_coupon_amount: Double = 0D,
+
                       var province_id: Long = 0L,
                       var order_status: String = null,
                       var user_id: Long = 0L,
@@ -29,10 +30,12 @@ case class OrderWide(
                       var operate_time: String = null,
                       var create_date: String = null,
                       var create_hour: String = null,
+
                       var province_name: String = null,
                       var province_area_code: String = null,
                       var province_3166_2_code: String = null,
                       var province_iso_code: String = null,
+
                       var user_age: Int = 0,
                       var user_gender: String = null
                     ) {
