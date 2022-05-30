@@ -235,7 +235,11 @@ object DwdOrderApp {
         orderWides.iterator
       }
     )
-    orderWideDstream.print(10000)
+//    orderWideDstream.print(10000)
+//    写入OLAP
+//    按照天分割索引，通过索引模板控制mapping，setting，aliases登
+//    准备ES工具类
+
     ssc.start()
     ssc.awaitTermination()
 

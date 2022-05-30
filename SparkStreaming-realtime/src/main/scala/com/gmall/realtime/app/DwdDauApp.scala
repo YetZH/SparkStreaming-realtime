@@ -2,7 +2,7 @@ package com.gmall.realtime.app
 
 import com.alibaba.fastjson.{JSON, JSONObject}
 import com.gmall.realtime.bean.{DauInfo, PageLog}
-import com.gmall.realtime.util.{MyBeanUtils, MyOffsetUtils, MyRedisUtils, MykafkaUtils}
+import com.gmall.realtime.util.{MyBeanUtils, MyEsUtils, MyOffsetUtils, MyRedisUtils, MykafkaUtils}
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
 import org.apache.spark.SparkConf
@@ -88,7 +88,7 @@ object DwdDauApp {
         val mid: String = pagelog.mid
         val date = new Date(pagelog.ts)
         val dateStr: String = Dateformat.format(date)
-        val redisKey = s"DAY:$dateStr"
+        val redisKey = s"DAU:$dateStr"
 
         if (!jedis.sismember(redisKey, mid)) {
           jedis.sadd(redisKey, mid)
@@ -153,9 +153,38 @@ object DwdDauApp {
         DauInfoes.iterator
       }
     )
-//  todo
+    //    DauInfoDstream.print(100)
+
+    //  todo
     //   写入到OLAP当中  上面数据已经处理好了 下面就是分析步骤
-    DauInfoDstream.print(100)
+    //    写入OLAP
+    //    按照天分割索引，通过索引模板控制mapping，setting，aliases登
+    //    准备ES工具类
+    DauInfoDstream.foreachRDD(
+      rdd => {
+        rdd.foreachPartition(
+          dauInfoIter => {
+            val docs: List[(String, DauInfo)] = dauInfoIter.map(dayinfo => (dayinfo.mid, dayinfo)).toList //doc_id, data
+            //     索引名
+            //  如果真实环境 直接获取当前日期 写入即可
+            //  而我们是模拟数据 会生成不同日期的数据
+            if (docs.nonEmpty) {
+              // 获取日期
+              val head: (String, DauInfo) = docs.head
+              val ts: Long = head._2.ts
+              val sdf = new SimpleDateFormat("yyyy-MM-dd")
+              val dateStr: String = sdf.format(new Date(ts))
+              val indexName: String = s"gmall_day_info_$dateStr"
+
+              //            写入到ES中
+              MyEsUtils.bulkSave(indexName, docs)
+            }
+           }
+        )
+//        提交Offset
+        MyOffsetUtils.saveOffset(topicName,groupId,offsetRanges)
+      }
+    )
 
     ssc.start()
     ssc.awaitTermination();
