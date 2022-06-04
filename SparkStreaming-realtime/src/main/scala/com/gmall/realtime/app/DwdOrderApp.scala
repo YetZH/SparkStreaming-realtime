@@ -3,7 +3,7 @@ package com.gmall.realtime.app
 import com.alibaba.fastjson.serializer.SerializeConfig
 import com.alibaba.fastjson.{JSON, JSONObject}
 import com.gmall.realtime.bean.{OrderDetail, OrderInfo, OrderWide}
-import com.gmall.realtime.util.{MyOffsetUtils, MyRedisUtils, MykafkaUtils}
+import com.gmall.realtime.util.{MyEsUtils, MyOffsetUtils, MyRedisUtils, MykafkaUtils}
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
 import org.apache.spark.SparkConf
@@ -235,11 +235,26 @@ object DwdOrderApp {
         orderWides.iterator
       }
     )
-//    orderWideDstream.print(10000)
-//    写入OLAP
-//    按照天分割索引，通过索引模板控制mapping，setting，aliases登
-//    准备ES工具类
+    //    orderWideDstream.print(10000)
+    //    写入OLAP
+    //    按照天分割索引，通过索引模板控制mapping，setting，aliases登
+    //    准备ES工具类
+    orderWideDstream.foreachRDD(rdd => {
+      rdd.foreachPartition(iterOrderWide => {
+        val orderWides: List[(String, OrderWide)] = iterOrderWide.map(orderwide => (orderwide.detail_id.toString, orderwide)).toList
+        if (orderWides.nonEmpty) {
+          val head: (String, OrderWide) = orderWides.head
+          val date: String = head._2.create_date
+          val indexName: String = s"gmall_order_wide_$date"
 
+          //            写入到ES中
+          MyEsUtils.bulkSave(indexName, orderWides)
+        }
+      })
+      // 提交offset 两份
+      MyOffsetUtils.saveOffset(orderInfoTopicName,orderInfoGroupId,OrderInfoOffsetRanges)
+      MyOffsetUtils.saveOffset(orderDetailTopicName,orderDetailGroupId,orderDetailOffsetRanges)
+    })
     ssc.start()
     ssc.awaitTermination()
 

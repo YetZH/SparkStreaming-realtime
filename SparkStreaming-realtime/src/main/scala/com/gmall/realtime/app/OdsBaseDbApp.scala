@@ -88,7 +88,7 @@ object OdsBaseDbApp {
       //    维度表清单
       val dimTables: util.Set[String] = jedis.smembers(redisDimKey)
       jedis.close()
-//     todo  使用广播变量优化
+      //     todo  使用广播变量优化
       val factTablesBC: Broadcast[util.Set[String]] = ssc.sparkContext.broadcast(factTables)
       val dimTablesBC: Broadcast[util.Set[String]] = ssc.sparkContext.broadcast(dimTables)
       rdd.foreachPartition(jsonObjIter => {
